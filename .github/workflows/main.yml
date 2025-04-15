@@ -37,80 +37,65 @@ jobs:
         ls -la
         find . -name "artisan" -type f | xargs echo "Artisan file found at:"
         find . -name "composer.json" -type f | xargs echo "composer.json found at:"
+        find . -name ".env.example" -type f | xargs echo ".env.example found at:"
 
-    - name: Copy .env if exists
+    - name: Find Laravel Project
+      id: find-laravel
       run: |
+        ARTISAN_FILE=$(find . -name "artisan" -type f | head -n 1)
+        if [ -n "$ARTISAN_FILE" ]; then
+          LARAVEL_DIR=$(dirname "$ARTISAN_FILE")
+          echo "Found Laravel project at: $LARAVEL_DIR"
+          echo "laravel_dir=$LARAVEL_DIR" >> $GITHUB_OUTPUT
+        else
+          echo "Laravel project not found"
+          exit 1
+        fi
+
+    - name: Install Dependencies
+      run: |
+        cd ${{ steps.find-laravel.outputs.laravel_dir }}
+        composer install --prefer-dist --no-interaction --no-progress
+
+    - name: Copy .env
+      run: |
+        cd ${{ steps.find-laravel.outputs.laravel_dir }}
         if [ -f ".env.example" ]; then
-          php -r "file_exists('.env') || copy('.env.example', '.env');"
+          cp .env.example .env
           echo ".env file created from .env.example"
         else
-          echo ".env.example not found"
-          echo "APP_KEY=base64:$(openssl rand -base64 32)" > .env
+          echo "APP_NAME=\"Payment System\"" > .env
+          echo "APP_ENV=testing" >> .env
+          echo "APP_KEY=" >> .env
+          echo "APP_DEBUG=true" >> .env
+          echo "APP_URL=http://localhost" >> .env
           echo "DB_CONNECTION=mysql" >> .env
           echo "DB_HOST=127.0.0.1" >> .env
           echo "DB_PORT=3306" >> .env
           echo "DB_DATABASE=payment_system_test" >> .env
           echo "DB_USERNAME=root" >> .env
           echo "DB_PASSWORD=password" >> .env
-          echo "Basic .env file created"
+          echo "Basic .env file created manually"
         fi
+        cat .env
 
-    - name: Find and Install Dependencies
+    - name: Generate App Key
       run: |
-        if [ -f "composer.json" ]; then
-          composer install --prefer-dist --no-interaction --no-progress
-          echo "Dependencies installed from root composer.json"
-        else
-          COMPOSER_JSON=$(find . -name "composer.json" -not -path "*/vendor/*" | head -n 1)
-          if [ -n "$COMPOSER_JSON" ]; then
-            COMPOSER_DIR=$(dirname "$COMPOSER_JSON")
-            echo "Found composer.json at: $COMPOSER_DIR"
-            cd "$COMPOSER_DIR"
-            composer install --prefer-dist --no-interaction --no-progress
-            echo "Dependencies installed from found composer.json"
-          else
-            echo "No composer.json found in repository"
-            exit 1
-          fi
-        fi
+        cd ${{ steps.find-laravel.outputs.laravel_dir }}
+        php artisan key:generate --force
 
-    - name: Check and Generate Artisan Key
+    - name: Directory Permissions
       run: |
-        ARTISAN_FILE=$(find . -name "artisan" -type f | head -n 1)
-        if [ -n "$ARTISAN_FILE" ]; then
-          ARTISAN_DIR=$(dirname "$ARTISAN_FILE")
-          echo "Found artisan at: $ARTISAN_DIR"
-          cd "$ARTISAN_DIR"
-          php artisan key:generate --force
-          echo "App key generated"
-        else
-          echo "Artisan file not found, skipping key generation"
-        fi
+        cd ${{ steps.find-laravel.outputs.laravel_dir }}
+        chmod -R 777 storage bootstrap/cache
 
-    - name: Set Directory Permissions if Needed
+    - name: Configure Database
       run: |
-        ARTISAN_FILE=$(find . -name "artisan" -type f | head -n 1)
-        if [ -n "$ARTISAN_FILE" ]; then
-          ARTISAN_DIR=$(dirname "$ARTISAN_FILE")
-          cd "$ARTISAN_DIR"
-          if [ -d "storage" ] && [ -d "bootstrap/cache" ]; then
-            chmod -R 777 storage bootstrap/cache
-            echo "Directory permissions set"
-          fi
-        fi
+        cd ${{ steps.find-laravel.outputs.laravel_dir }}
+        php artisan config:clear
+        php artisan migrate --force || echo "Migration failed, but continuing..."
 
-    - name: Run Database Migrations if Artisan Exists
-      run: |
-        ARTISAN_FILE=$(find . -name "artisan" -type f | head -n 1)
-        if [ -n "$ARTISAN_FILE" ]; then
-          ARTISAN_DIR=$(dirname "$ARTISAN_FILE")
-          cd "$ARTISAN_DIR"
-          php artisan config:clear
-          php artisan migrate --force || echo "Migration failed, but continuing..."
-          echo "Database configuration completed"
-        fi
-
-    - name: Run Tests if PHPUnit Exists
+    - name: Execute Tests
       env:
         DB_CONNECTION: mysql
         DB_HOST: 127.0.0.1
@@ -119,26 +104,13 @@ jobs:
         DB_USERNAME: root
         DB_PASSWORD: password
       run: |
-        if [ -f "vendor/bin/phpunit" ]; then
-          vendor/bin/phpunit --coverage-clover=coverage.xml
-          echo "Tests executed at root level"
-        else
-          PHPUNIT=$(find . -path "*/vendor/bin/phpunit" | head -n 1)
-          if [ -n "$PHPUNIT" ]; then
-            PHPUNIT_DIR=$(dirname $(dirname $(dirname "$PHPUNIT")))
-            echo "Found PHPUnit at: $PHPUNIT_DIR"
-            cd "$PHPUNIT_DIR"
-            vendor/bin/phpunit --coverage-clover=coverage.xml
-            echo "Tests executed from found location"
-          else
-            echo "PHPUnit not found, skipping tests"
-          fi
-        fi
+        cd ${{ steps.find-laravel.outputs.laravel_dir }}
+        vendor/bin/phpunit --coverage-clover=coverage.xml
 
-    - name: Upload Coverage Report if Available
+    - name: Upload Coverage Report
       uses: codecov/codecov-action@v3
       with:
-        file: ./coverage.xml
+        file: ${{ steps.find-laravel.outputs.laravel_dir }}/coverage.xml
         fail_ci_if_error: false
 
   laravel-deploy:
@@ -148,6 +120,20 @@ jobs:
     
     steps:
     - uses: actions/checkout@v3
+    
+    - name: Find Laravel Project
+      id: find-laravel
+      run: |
+        ARTISAN_FILE=$(find . -name "artisan" -type f | head -n 1)
+        if [ -n "$ARTISAN_FILE" ]; then
+          LARAVEL_DIR=$(dirname "$ARTISAN_FILE")
+          echo "laravel_dir=$LARAVEL_DIR" >> $GITHUB_OUTPUT
+          RELATIVE_PATH=$(realpath --relative-to="$(pwd)" "$LARAVEL_DIR")
+          echo "relative_path=$RELATIVE_PATH" >> $GITHUB_OUTPUT
+        else
+          echo "Laravel project not found"
+          exit 1
+        fi
       
     - name: Configure SSH
       run: |
@@ -166,23 +152,14 @@ jobs:
         SSH_HOST: ${{ secrets.SSH_HOST }}
         SSH_USER: ${{ secrets.SSH_USER }}
 
-    - name: Determine Project Structure and Deploy
+    - name: Deploy to Production
       run: |
-        # Find Laravel project root directory
-        ARTISAN_FILE=$(find . -name "artisan" -type f | head -n 1)
-        if [ -n "$ARTISAN_FILE" ]; then
-          LARAVEL_DIR=$(dirname "$ARTISAN_FILE")
-          echo "Found Laravel project at: $LARAVEL_DIR"
-          RELATIVE_PATH=$(realpath --relative-to="$(pwd)" "$LARAVEL_DIR")
-          
-          if [ "$RELATIVE_PATH" = "." ]; then
-            # Laravel is at repository root
-            ssh production 'cd /var/www/payment-system && git pull origin main && composer install --no-interaction --prefer-dist --optimize-autoloader && php artisan migrate --force && php artisan config:cache && php artisan route:cache && php artisan view:cache'
-          else
-            # Laravel is in a subdirectory
-            ssh production "cd /var/www/payment-system && git pull origin main && cd $RELATIVE_PATH && composer install --no-interaction --prefer-dist --optimize-autoloader && php artisan migrate --force && php artisan config:cache && php artisan route:cache && php artisan view:cache"
-          fi
+        RELATIVE_PATH="${{ steps.find-laravel.outputs.relative_path }}"
+        
+        if [ "$RELATIVE_PATH" = "." ]; then
+          # Laravel is at repository root
+          ssh production 'cd /var/www/payment-system && git pull origin main && composer install --no-interaction --prefer-dist --optimize-autoloader && php artisan migrate --force && php artisan config:cache && php artisan route:cache && php artisan view:cache'
         else
-          echo "Laravel project not found, cannot deploy"
-          exit 1
+          # Laravel is in a subdirectory
+          ssh production "cd /var/www/payment-system && git pull origin main && cd $RELATIVE_PATH && composer install --no-interaction --prefer-dist --optimize-autoloader && php artisan migrate --force && php artisan config:cache && php artisan route:cache && php artisan view:cache"
         fi
