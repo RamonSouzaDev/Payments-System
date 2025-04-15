@@ -126,36 +126,36 @@ jobs:
           exit 1
         fi
       
-    - name: Debug SSH Secrets
+    - name: Check SSH Secrets
+      id: check_secrets
       run: |
-        if [ -z "${{ secrets.SSH_HOST }}" ]; then
-          echo "Error: SSH_HOST secret is not set or empty"
-          exit 1
+        if [ -n "${{ secrets.SSH_HOST }}" ] && [ -n "${{ secrets.SSH_USER }}" ] && [ -n "${{ secrets.SSH_KEY }}" ]; then
+          echo "has_secrets=true" >> $GITHUB_OUTPUT
+          echo "All required SSH secrets are set"
+        else
+          echo "has_secrets=false" >> $GITHUB_OUTPUT
+          echo "Some SSH secrets are missing. Deployment will be skipped."
+          echo "Please add the following secrets in your GitHub repository settings:"
+          echo "- SSH_HOST: The hostname or IP address of your server"
+          echo "- SSH_USER: The username for SSH login"
+          echo "- SSH_KEY: The private SSH key for authentication"
+          echo "IMPORTANTE: Você pode adicionar esses segredos em 'Settings > Secrets and variables > Actions' do seu repositório GitHub"
         fi
-        if [ -z "${{ secrets.SSH_USER }}" ]; then
-          echo "Error: SSH_USER secret is not set or empty"
-          exit 1
-        fi
-        if [ -z "${{ secrets.SSH_KEY }}" ]; then
-          echo "Error: SSH_KEY secret is not set or empty"
-          exit 1
-        fi
-        echo "All required SSH secrets are set"
 
-    - name: Configure SSH
+    - name: Configure SSH and Deploy
+      if: steps.check_secrets.outputs.has_secrets == 'true'
       run: |
         mkdir -p ~/.ssh/
         echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
         chmod 600 ~/.ssh/deploy_key
+        
+        # Create SSH config file
         echo "Host production" > ~/.ssh/config
         echo "  HostName ${{ secrets.SSH_HOST }}" >> ~/.ssh/config
         echo "  User ${{ secrets.SSH_USER }}" >> ~/.ssh/config
         echo "  IdentityFile ~/.ssh/deploy_key" >> ~/.ssh/config
         echo "  StrictHostKeyChecking no" >> ~/.ssh/config
-        cat ~/.ssh/config
-
-    - name: Deploy to Production
-      run: |
+        
         RELATIVE_PATH="${{ steps.find-laravel.outputs.relative_path }}"
         echo "Deploying from relative path: $RELATIVE_PATH"
         
@@ -166,3 +166,10 @@ jobs:
           # Laravel is in a subdirectory
           ssh production "cd /var/www/payment-system && git pull origin main && cd $RELATIVE_PATH && composer install --no-interaction --prefer-dist --optimize-autoloader && php artisan migrate --force && php artisan config:cache && php artisan route:cache && php artisan view:cache"
         fi
+
+    - name: Deployment Skipped
+      if: steps.check_secrets.outputs.has_secrets != 'true'
+      run: |
+        echo "Deployment step was skipped because some required secrets are missing."
+        echo "The testing phase completed successfully!"
+        echo "IMPORTANTE: Para habilitar a implantação automática, configure os segredos SSH em 'Settings > Secrets and variables > Actions' do seu repositório GitHub."
