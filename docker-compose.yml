@@ -1,0 +1,70 @@
+version: '3'
+services:
+  app:
+    build:
+      args:
+        user: laravel
+        uid: 1000
+      context: ./
+      dockerfile: Dockerfile
+    image: laravel-payment-system
+    container_name: payment-system-app
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - ./laravel_app:/var/www
+    networks:
+      - payment-system
+
+  db:
+    image: mysql:5.7
+    container_name: payment-system-db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-payment_system}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-root}
+      MYSQL_USER: ${DB_USERNAME:-laravel}
+      SERVICE_TAGS: dev
+      SERVICE_NAME: mysql
+    volumes:
+      - ./docker-compose/mysql:/docker-entrypoint-initdb.d
+      - payment-db-data:/var/lib/mysql
+    networks:
+      - payment-system
+
+  nginx:
+    image: nginx:alpine
+    container_name: payment-system-nginx
+    restart: unless-stopped
+    ports:
+      - 8088:80
+    volumes:
+      - ./laravel_app:/var/www
+      - ./docker-compose/nginx:/etc/nginx/conf.d/
+    networks:
+      - payment-system
+
+  queue-worker:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    image: laravel-payment-system
+    container_name: payment-system-queue
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - ./laravel_app:/var/www
+    depends_on:
+      - app
+      - db
+    networks:
+      - payment-system
+    command: php artisan queue:work --tries=3 --timeout=90
+
+networks:
+  payment-system:
+    driver: bridge
+
+volumes:
+  payment-db-data:
