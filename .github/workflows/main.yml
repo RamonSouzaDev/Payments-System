@@ -33,21 +33,15 @@ jobs:
     - name: Copy .env
       run: php -r "file_exists('.env') || copy('.env.example', '.env');"
 
-    - name: Get Composer Cache Directory
-      id: composer-cache
-      run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
-
-    - name: Cache Composer dependencies
-      uses: actions/cache@v3
-      with:
-        path: ${{ steps.composer-cache.outputs.dir }}
-        key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
-        restore-keys: ${{ runner.os }}-composer-
-
     - name: Install Dependencies
       run: |
-        composer config -g process-timeout 600
-        composer install --prefer-dist --no-interaction --no-progress
+        if [ -f "composer.json" ]; then
+          composer install --prefer-dist --no-interaction --no-progress
+        else
+          echo "composer.json not found. Creating a basic one..."
+          echo '{"name": "project/payment-system", "description": "Payment System", "type": "project", "require": {"php": "^8.1"}}' > composer.json
+          composer install --prefer-dist --no-interaction --no-progress
+        fi
 
     - name: Generate key
       run: php artisan key:generate
